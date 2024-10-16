@@ -11,12 +11,12 @@
 const char* ssid = "SILVIA_ESCOBAR";
 const char* password = "13303110";
 
-String url = "http://192.168.249.173:8080/data/create";
+String url = "http://192.168.220.173:8080/data/create";
 
 const char* mqttServer = "broker.hivemq.com";  // Servidor MQTT
 const int mqttPort = 1883;                     // Puerto MQTT
 const char* clientName = "ESP32ClientIcesi";   // Nombre del cliente MQTT
-const char* topic = "icesitel/medicion";       // Topic para recibir comandos
+const char* topic = "icesitel";       // Topic para recibir comandos
 
 HTTPClient http;
 Adafruit_MPU6050 mpu;
@@ -26,6 +26,9 @@ PubSubClient mqttClient(wifiClient);
 int samplingRateHz = 20;   
 int numSamples = 200;      
 int samplingIntervalMs = 1000 / samplingRateHz;
+
+StaticJsonDocument<1024> allMeasurements;
+JsonArray measurementsArray = allMeasurements.createNestedArray("measurements");
 
 // Conectar a WiFi
 void runWiFi() {
@@ -38,8 +41,8 @@ void runWiFi() {
   Serial.println(WiFi.localIP());
 }
 
-// Enviar datos a través de HTTP POST
-void sendDataToServer(float accX, float accY, float accZ, float gyroX, float gyroY, float gyroZ) {
+// Función para agregar una medición al arreglo de mediciones
+void addMeasurement(float accX, float accY, float accZ, float gyroX, float gyroY, float gyroZ) {
   StaticJsonDocument<256> jsonDoc;
 
   jsonDoc["xac"] = accX;     // Aceleración X
@@ -49,8 +52,13 @@ void sendDataToServer(float accX, float accY, float accZ, float gyroX, float gyr
   jsonDoc["ygi"] = gyroY;    // Giroscopio Y
   jsonDoc["zgi"] = gyroZ;    // Giroscopio Z
 
+  measurementsArray.add(jsonDoc);
+}
+
+// Función para enviar todas las mediciones acumuladas a través de HTTP POST
+void sendAllDataToServer() {
   String jsonData;
-  serializeJson(jsonDoc, jsonData);
+  serializeJson(allMeasurements, jsonData);
 
   Serial.print("JSON data: ");
   Serial.println(jsonData);
@@ -63,16 +71,19 @@ void sendDataToServer(float accX, float accY, float accZ, float gyroX, float gyr
   http.end();
 }
 
-// Leer datos de todos los sensores y enviar en formato JSON
+// Leer datos de todos los sensores, almacenarlos y enviar en formato JSON al final
 void readAndSendAllSensors() {
+  measurementsArray.clear();
   for (int i = 0; i < numSamples; i++) {
     sensors_event_t a, g, temp;
     mpu.getEvent(&a, &g, &temp);
 
-    sendDataToServer(a.acceleration.x, a.acceleration.y, a.acceleration.z, g.gyro.x, g.gyro.y, g.gyro.z);
+    addMeasurement(a.acceleration.x, a.acceleration.y, a.acceleration.z, g.gyro.x, g.gyro.y, g.gyro.z);
     
     delay(samplingIntervalMs);
   }
+  
+  sendAllDataToServer();
 }
 
 // Callback que se activa cuando llega un mensaje MQTT
@@ -87,7 +98,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   Serial.println(message);
   
-  // Ejecutar medición basada en el mensaje recibido
   if (message == "m") {
     Serial.println("Iniciando medición de todos los sensores");
     readAndSendAllSensors();
@@ -106,7 +116,7 @@ void connectToMQTTBroker() {
     if (mqttClient.connect(clientName)) {
       Serial.println("Conectado al servidor MQTT!");
       mqttClient.subscribe(topic); 
-      Serial.println("Suscrito al topic icesitel/medicion");
+      Serial.println("Suscrito al topic icesitel");
     } else {
       Serial.print("Error al conectar: ");
       Serial.println(mqttClient.state());
