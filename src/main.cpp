@@ -8,27 +8,29 @@
 #include <HTTPClient.h>
 #include <PubSubClient.h>
 
-const char* ssid = "SILVIA_ESCOBAR";
-const char* password = "13303110";
+const char* ssid = "gladys";
+const char* password = "gladysss";
 
-String url = "http://192.168.220.173:8080/data/create";
+String url = "http://192.168.151.173:8080/measure";
 
-const char* mqttServer = "broker.hivemq.com";  // Servidor MQTT
-const int mqttPort = 1883;                     // Puerto MQTT
-const char* clientName = "ESP32ClientIcesi";   // Nombre del cliente MQTT
-const char* topic = "icesitel";       // Topic para recibir comandos
+const char* mqttServer = "broker.emqx.io";             // Servidor MQTT
+const int mqttPort = 1883;                             // Puerto MQTT
+const char* clientName = "ESP32ClientIcesiA00123456";  // Nombre del cliente MQTT
+const char* topic = "icesitel";                        // Topic para recibir comandos
 
 HTTPClient http;
 Adafruit_MPU6050 mpu;
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
-int samplingRateHz = 20;   
-int numSamples = 200;      
+int samplingRateHz = 20;                               // Frecuencia de muestreo
+int numSamples = 200;                                  // Número de muestras a recolectar
 int samplingIntervalMs = 1000 / samplingRateHz;
 
-StaticJsonDocument<1024> allMeasurements;
-JsonArray measurementsArray = allMeasurements.createNestedArray("measurements");
+StaticJsonDocument<4096> allMeasurements;
+JsonObject readings = allMeasurements.createNestedObject("readings");
+JsonArray accelerometer = readings.createNestedArray("accelerometer");
+JsonArray gyroscope = readings.createNestedArray("gyroscope");
 
 // Conectar a WiFi
 void runWiFi() {
@@ -41,21 +43,22 @@ void runWiFi() {
   Serial.println(WiFi.localIP());
 }
 
-// Función para agregar una medición al arreglo de mediciones
-void addMeasurement(float accX, float accY, float accZ, float gyroX, float gyroY, float gyroZ) {
-  StaticJsonDocument<256> jsonDoc;
+// Agregar una medición a los arrays de JSON
+void addMeasurement(float accX, float accY, float accZ, float gyroX, float gyroY, float gyroZ, float timestamp) {
+  JsonObject accMeasurement = accelerometer.createNestedObject();
+  accMeasurement["x"] = accX;
+  accMeasurement["y"] = accY;
+  accMeasurement["z"] = accZ;
+  accMeasurement["timestamp"] = timestamp;
 
-  jsonDoc["xac"] = accX;     // Aceleración X
-  jsonDoc["yac"] = accY;     // Aceleración Y
-  jsonDoc["zac"] = accZ;     // Aceleración Z
-  jsonDoc["xgi"] = gyroX;    // Giroscopio X
-  jsonDoc["ygi"] = gyroY;    // Giroscopio Y
-  jsonDoc["zgi"] = gyroZ;    // Giroscopio Z
-
-  measurementsArray.add(jsonDoc);
+  JsonObject gyroMeasurement = gyroscope.createNestedObject();
+  gyroMeasurement["x"] = gyroX;
+  gyroMeasurement["y"] = gyroY;
+  gyroMeasurement["z"] = gyroZ;
+  gyroMeasurement["timestamp"] = timestamp;
 }
 
-// Función para enviar todas las mediciones acumuladas a través de HTTP POST
+// Función para enviar los datos por HTTP POST
 void sendAllDataToServer() {
   String jsonData;
   serializeJson(allMeasurements, jsonData);
@@ -71,22 +74,30 @@ void sendAllDataToServer() {
   http.end();
 }
 
-// Leer datos de todos los sensores, almacenarlos y enviar en formato JSON al final
+// Leer y enviar datos de los sensores
 void readAndSendAllSensors() {
-  measurementsArray.clear();
+  accelerometer.clear();
+  gyroscope.clear();
+
+  unsigned long startTime = millis();
+
   for (int i = 0; i < numSamples; i++) {
     sensors_event_t a, g, temp;
     mpu.getEvent(&a, &g, &temp);
 
-    addMeasurement(a.acceleration.x, a.acceleration.y, a.acceleration.z, g.gyro.x, g.gyro.y, g.gyro.z);
-    
+    float currentTime = (millis() - startTime) / 1000.0;
+    addMeasurement(a.acceleration.x, a.acceleration.y, a.acceleration.z, g.gyro.x, g.gyro.y, g.gyro.z, currentTime);
+
     delay(samplingIntervalMs);
   }
-  
+
   sendAllDataToServer();
+
+  mqttClient.publish(topic, "E");
+  Serial.println("Mensaje 'E' enviado.");
 }
 
-// Callback que se activa cuando llega un mensaje MQTT
+// Callback para mensajes MQTT
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Mensaje recibido en el topic ");
   Serial.print(topic);
@@ -99,7 +110,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.println(message);
   
   if (message == "m") {
-    Serial.println("Iniciando medición de todos los sensores");
+    Serial.println("Iniciando medición de los sensores");
     readAndSendAllSensors();
   } else {
     Serial.println("Comando no reconocido");
@@ -125,7 +136,7 @@ void connectToMQTTBroker() {
   }
 }
 
-// Inicializar la ESP32
+// Configuración inicial
 void setup() {
   Serial.begin(115200);
 
@@ -143,9 +154,11 @@ void setup() {
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
+
+  Serial.println("Envía 'm' por MQTT para iniciar la medición.");
 }
 
-// Loop principal del programa
+// Loop principal
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Conexión WiFi perdida. Intentando reconectar...");
